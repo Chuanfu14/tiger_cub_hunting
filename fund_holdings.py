@@ -458,9 +458,9 @@ def gspread_utils_col(n: int) -> str:
     return out
 
 
-def write_sheet(rows: list[list], sheet_name: str, worksheet: str,
+def write_sheet(rows: list[list], sheet_name: str | None, worksheet: str,
                 creds_path: str, matrix_worksheet: str = "Matrix",
-                per_fund_tabs: bool = True) -> None:
+                per_fund_tabs: bool = True, sheet_id: str | None = None) -> None:
     """Append new rows to the log tab, then rebuild the derived tabs.
 
     The log tab ('Holdings') accumulates: re-running never duplicates a row,
@@ -470,17 +470,24 @@ def write_sheet(rows: list[list], sheet_name: str, worksheet: str,
     import gspread
     from google.oauth2.service_account import Credentials
 
-    scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+    # Opening by ID needs only the spreadsheets scope. Opening by *title*
+    # additionally searches Drive, which needs a Drive scope and the Drive
+    # API enabled on the project -- so prefer --sheet-id.
+    scopes = ["https://www.googleapis.com/auth/spreadsheets",
+              "https://www.googleapis.com/auth/drive"]
     creds = Credentials.from_service_account_file(creds_path, scopes=scopes)
     client = gspread.authorize(creds)
 
-    try:
-        spreadsheet = client.open(sheet_name)
-    except gspread.SpreadsheetNotFound:
-        print(f"Spreadsheet '{sheet_name}' not found. Create it in Google "
-              f"Drive, then share it with the client_email in {creds_path}.",
-              file=sys.stderr)
-        raise
+    if sheet_id:
+        spreadsheet = client.open_by_key(sheet_id)
+    else:
+        try:
+            spreadsheet = client.open(sheet_name)
+        except gspread.SpreadsheetNotFound:
+            print(f"Spreadsheet '{sheet_name}' not found. Check the title, or "
+                  f"use --sheet-id with the key from the sheet's URL.",
+                  file=sys.stderr)
+            raise
 
     # --- log tab: append only what's new -----------------------------------
     log = _get_or_create(spreadsheet, worksheet, len(rows) + 50, len(HEADER))
@@ -554,7 +561,10 @@ def main() -> int:
     p.add_argument("--dry-run", action="store_true",
                    help="print to console, write nothing")
     p.add_argument("--csv", metavar="PATH")
-    p.add_argument("--sheet", metavar="NAME", help="Google Sheets file name")
+    p.add_argument("--sheet", metavar="NAME", help="Google Sheets file title")
+    p.add_argument("--sheet-id", metavar="KEY",
+                   help="spreadsheet ID from the URL (preferred over --sheet: "
+                        "needs no Drive access)")
     p.add_argument("--worksheet", default="Holdings",
                    help="name of the append-only log tab")
     p.add_argument("--matrix-worksheet", default="Matrix",
@@ -638,11 +648,12 @@ def main() -> int:
     rows = to_rows(all_holdings)
     if args.csv:
         write_csv(rows, args.csv)
-    if args.sheet:
+    if args.sheet or args.sheet_id:
         write_sheet(rows, args.sheet, args.worksheet, args.creds,
                     matrix_worksheet=args.matrix_worksheet,
-                    per_fund_tabs=not args.no_fund_tabs)
-    if not args.csv and not args.sheet:
+                    per_fund_tabs=not args.no_fund_tabs,
+                    sheet_id=args.sheet_id)
+    if not args.csv and not args.sheet and not args.sheet_id:
         print("\n(Nothing written — pass --csv and/or --sheet.)")
     return 0
 
