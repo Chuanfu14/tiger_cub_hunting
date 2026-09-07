@@ -11,7 +11,7 @@
       "cwd": "${workspaceFolder}",
       "env": {
         "SEC_CONTACT_NAME": "Stan Fu",
-        "SEC_CONTACT_EMAIL": "chuanfu14@gmail.com"
+        "SEC_CONTACT_EMAIL": "email"
       }
     },
     {
@@ -24,7 +24,7 @@
       "cwd": "${workspaceFolder}",
       "env": {
         "SEC_CONTACT_NAME": "Stan Fu",
-        "SEC_CONTACT_EMAIL": "chuanfu14@gmail.com"
+        "SEC_CONTACT_EMAIL": "email"
       }
     },
     {
@@ -37,7 +37,7 @@
       "cwd": "${workspaceFolder}",
       "env": {
         "SEC_CONTACT_NAME": "Stan Fu",
-        "SEC_CONTACT_EMAIL": "chuanfu14@gmail.com"
+        "SEC_CONTACT_EMAIL": "email"
       }
     }
   ]
