@@ -1,0 +1,67 @@
+{
+  "_comment": [
+    "Edit this file to change which managers get tracked.",
+    "",
+    "  label    - what shows up in your spreadsheet. Anything you want.",
+    "  search   - the name used to look up the filer on SEC EDGAR.",
+    "             Should be close to the registered adviser name.",
+    "  cik      - leave as null the first time. Run with --save-ciks and",
+    "             the script fills this in for you. Once filled, lookups",
+    "             are skipped and runs get faster and more deterministic.",
+    "  enabled  - set false to skip without deleting the entry.",
+    "",
+    "To add a fund: copy any block, change label/search, set cik to null,",
+    "then run: python fund_holdings.py --save-ciks --dry-run"
+  ],
+  "funds": [
+    {
+      "label": "Tiger Global",
+      "search": "Tiger Global Management",
+      "cik": "0001167483",
+      "enabled": true,
+      "note": "Chase Coleman. The original cub, Julian Robertson seed."
+    },
+    {
+      "label": "Coatue",
+      "search": "Coatue Management",
+      "cik": "0001135730",
+      "enabled": true,
+      "note": "Philippe Laffont. Tech-concentrated cub."
+    },
+    {
+      "label": "Viking Global",
+      "search": "Viking Global Investors",
+      "cik": "0001103804",
+      "enabled": true,
+      "note": "Halvorsen. Cub; itself a source of grandcubs."
+    },
+    {
+      "label": "Lone Pine",
+      "search": "Lone Pine Capital",
+      "cik": "0001061165",
+      "enabled": true,
+      "note": "Stephen Mandel. Classic long/short cub."
+    },
+    {
+      "label": "D1 Capital",
+      "search": "D1 Capital Partners",
+      "cik": "0001747057",
+      "enabled": true,
+      "note": "Dan Sundheim, ex-Viking CIO. Grandcub. Large private book, so its 13F is a smaller slice of true AUM than the others."
+    },
+    {
+      "label": "Maverick Capital",
+      "search": "Maverick Capital",
+      "cik": null,
+      "enabled": false,
+      "note": "Lee Ainslie. Disabled by default \u2014 flip to true to include."
+    },
+    {
+      "label": "Light Street",
+      "search": "Light Street Capital",
+      "cik": null,
+      "enabled": false,
+      "note": "Glen Kacher, ex-Tiger. Disabled by default."
+    }
+  ]
+}

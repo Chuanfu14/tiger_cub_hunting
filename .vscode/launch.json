@@ -1,0 +1,44 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "13F: dry run (resolve + preview)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/fund_holdings.py",
+      "args": ["--save-ciks", "--dry-run"],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "SEC_CONTACT_NAME": "Stan Fu",
+        "SEC_CONTACT_EMAIL": "chuanfu14@gmail.com"
+      }
+    },
+    {
+      "name": "13F: push to Google Sheets",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/fund_holdings.py",
+      "args": ["--sheet", "13F Tracker", "--csv", "holdings.csv"],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "SEC_CONTACT_NAME": "Stan Fu",
+        "SEC_CONTACT_EMAIL": "chuanfu14@gmail.com"
+      }
+    },
+    {
+      "name": "13F: single fund",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/fund_holdings.py",
+      "args": ["--only", "Tiger Global", "--dry-run"],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "SEC_CONTACT_NAME": "Stan Fu",
+        "SEC_CONTACT_EMAIL": "chuanfu14@gmail.com"
+      }
+    }
+  ]
+}

@@ -1,0 +1,5 @@
+service_account.json
+.edgar_cache/
+.venv/
+__pycache__/
+*.csv
