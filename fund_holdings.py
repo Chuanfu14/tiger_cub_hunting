@@ -346,6 +346,9 @@ def top_holdings(fund: str, filing: Filing, positions: list[Position],
 # Step 5: output
 # ---------------------------------------------------------------------------
 
+LOG_BANNER = ("Holdings log - one row per fund, per quarter, per top-5 "
+              "holding. Source of truth; other tabs are built from this.")
+
 HEADER = ["Fund", "Quarter", "Period End", "Filed", "Form", "Rank",
           "Holding", "CUSIP6", "Value (as reported)", "% of 13F Portfolio",
           "Total Issuers in Filing"]
@@ -438,15 +441,110 @@ def build_matrix(all_rows: list[list], fund_filter: str | None = None
     return header, body
 
 
-def _write_tab(spreadsheet, title: str, header: list, body: list[list]) -> None:
-    """Overwrite a derived tab with a freshly built table."""
-    ws = _get_or_create(spreadsheet, title, len(body) + 20, len(header) + 2)
+FOOTNOTE = ("Cells are the stock's share of that fund's 13F-reported holdings "
+            "for the quarter. Blank = not in the fund's top 5 that quarter. "
+            "13F covers long US-listed equity only; it excludes shorts, bonds, "
+            "cash, and foreign listings, and is filed 45 days after quarter end. "
+            "A weight can move without any trading if the stock price moved. "
+            "See the About tab.")
+
+
+def _write_tab(spreadsheet, title: str, header: list, body: list[list],
+               banner: str = "", footnote: str = "") -> None:
+    """Overwrite a derived tab: banner row, header row, body, optional footnote."""
+    height = len(body) + 30
+    ws = _get_or_create(spreadsheet, title, height, len(header) + 2)
     ws.clear()
-    ws.update(values=[header] + body, range_name="A1",
-              value_input_option="USER_ENTERED")
-    ws.freeze(rows=1)
+
+    block: list[list] = [[banner] + [""] * (len(header) - 1)] if banner else []
+    block.append(header)
+    block.extend(body)
+    if footnote:
+        block.append([""] * len(header))
+        block.append([footnote] + [""] * (len(header) - 1))
+
+    ws.update(values=block, range_name="A1", value_input_option="USER_ENTERED")
+
     last_col = gspread_utils_col(len(header))
-    ws.format(f"A1:{last_col}1", {"textFormat": {"bold": True}})
+    if banner:
+        ws.merge_cells(f"A1:{last_col}1")
+        ws.format(f"A1:{last_col}1", {
+            "textFormat": {"bold": True, "fontSize": 12},
+            "backgroundColor": {"red": 0.92, "green": 0.94, "blue": 0.98},
+        })
+        ws.format(f"A2:{last_col}2", {"textFormat": {"bold": True}})
+        ws.freeze(rows=2)
+    else:
+        ws.format(f"A1:{last_col}1", {"textFormat": {"bold": True}})
+        ws.freeze(rows=1)
+
+    if footnote:
+        note_row = len(block)
+        ws.merge_cells(f"A{note_row}:{last_col}{note_row}")
+        ws.format(f"A{note_row}:{last_col}{note_row}", {
+            "textFormat": {"italic": True, "fontSize": 9},
+            "wrapStrategy": "WRAP",
+        })
+
+
+ABOUT_ROWS = [
+    ["13F Holdings Tracker"],
+    [""],
+    ["What this is"],
+    ["Top 5 equity holdings and portfolio weights for a set of hedge funds, "
+     "pulled from their quarterly SEC 13F-HR filings."],
+    [""],
+    ["The tabs"],
+    ["Holdings", "Append-only log. One row per fund, per quarter, per holding. "
+                 "This is the source of truth; the other tabs are built from it."],
+    ["<fund name>", "One tab per fund. Holdings down the left, quarters across "
+                    "the top, portfolio weight in the cells."],
+    [""],
+    ["What the numbers mean"],
+    ["Every percentage is that stock's share of the fund's total 13F-reported "
+     "holdings for that quarter, by market value at quarter end."],
+    ["A blank cell means the stock was not in that fund's top 5 that quarter. "
+     "It does not necessarily mean the fund sold out -- it may just have been "
+     "pushed down the list."],
+    [""],
+    ["Important limits"],
+    ["1.", "13F covers long US-listed equity positions only. No short positions, "
+           "bonds, cash, foreign listings, or most derivatives. So 'percent of "
+           "portfolio' means percent of the 13F slice, not percent of the fund."],
+    ["2.", "Filings are due 45 days after quarter end, so the newest data is at "
+           "least six weeks stale when it appears."],
+    ["3.", "A weight can rise or fall with no trading at all. If a stock gains "
+           "30% and the manager does nothing, its weight still goes up. Weights "
+           "show sizing, not activity."],
+    ["4.", "For long/short funds, a name shown as a top long says nothing about "
+           "net exposure -- it may be hedged or offset elsewhere."],
+    ["5.", "When a private company lists publicly, a long-held stake appears in "
+           "the 13F for the first time and can dominate the portfolio overnight. "
+           "That is a visibility event, not a new purchase."],
+    [""],
+    ["Maintenance"],
+    ["Matrix and the fund tabs are cleared and rebuilt on every run -- do not "
+     "hand-edit them. Holdings is only ever appended to, so notes added in "
+     "columns to the right of it will survive."],
+    ["New quarters are added by re-running the script; existing data is kept."],
+]
+
+
+def write_about_tab(spreadsheet) -> None:
+    """Create or refresh the explanatory first tab."""
+    import gspread
+    try:
+        ws = spreadsheet.worksheet("About")
+        ws.clear()
+    except gspread.WorksheetNotFound:
+        ws = spreadsheet.add_worksheet(title="About", rows=60, cols=4, index=0)
+
+    ws.update(values=ABOUT_ROWS, range_name="A1",
+              value_input_option="USER_ENTERED")
+    ws.format("A1:D1", {"textFormat": {"bold": True, "fontSize": 14}})
+    for row in (3, 6, 11, 15, 22):
+        ws.format(f"A{row}:D{row}", {"textFormat": {"bold": True, "fontSize": 11}})
+    ws.columns_auto_resize(0, 1)
 
 
 def gspread_utils_col(n: int) -> str:
@@ -460,7 +558,8 @@ def gspread_utils_col(n: int) -> str:
 
 def write_sheet(rows: list[list], sheet_name: str | None, worksheet: str,
                 creds_path: str, matrix_worksheet: str = "Matrix",
-                per_fund_tabs: bool = True, sheet_id: str | None = None) -> None:
+                per_fund_tabs: bool = True, sheet_id: str | None = None,
+                matrix_tab: bool = True) -> None:
     """Append new rows to the log tab, then rebuild the derived tabs.
 
     The log tab ('Holdings') accumulates: re-running never duplicates a row,
@@ -492,16 +591,34 @@ def write_sheet(rows: list[list], sheet_name: str | None, worksheet: str,
     # --- log tab: append only what's new -----------------------------------
     log = _get_or_create(spreadsheet, worksheet, len(rows) + 50, len(HEADER))
     existing = log.get_all_values()
+    last_col = gspread_utils_col(len(HEADER))
 
-    if not existing:
-        log.update(values=[HEADER], range_name="A1",
-                   value_input_option="USER_ENTERED")
-        log.freeze(rows=1)
-        log.format(f"A1:{gspread_utils_col(len(HEADER))}1",
-                   {"textFormat": {"bold": True}})
+    # Find the header row rather than assuming row 1, so the banner can be
+    # added to sheets that were created before banners existed.
+    header_idx = next((i for i, r in enumerate(existing)
+                       if r and r[0] == HEADER[0]), None)
+
+    if header_idx is None:
+        log.update(values=[[LOG_BANNER] + [""] * (len(HEADER) - 1), HEADER],
+                   range_name="A1", value_input_option="USER_ENTERED")
         prior: list[list] = []
+        header_idx = 1
+    elif header_idx == 0:
+        # older sheet: no banner yet, insert one above the header
+        log.insert_row([LOG_BANNER] + [""] * (len(HEADER) - 1), index=1,
+                       value_input_option="USER_ENTERED")
+        prior = existing[1:]
+        header_idx = 1
     else:
-        prior = existing[1:]  # drop header
+        prior = existing[header_idx + 1:]
+
+    log.merge_cells(f"A1:{last_col}1")
+    log.format(f"A1:{last_col}1", {
+        "textFormat": {"bold": True, "fontSize": 12},
+        "backgroundColor": {"red": 0.92, "green": 0.94, "blue": 0.98},
+    })
+    log.format(f"A2:{last_col}2", {"textFormat": {"bold": True}})
+    log.freeze(rows=2)
 
     seen = {_row_key(r) for r in prior if len(r) > C_PCT}
     fresh = [r for r in rows if _row_key(r) not in seen]
@@ -516,9 +633,12 @@ def write_sheet(rows: list[list], sheet_name: str | None, worksheet: str,
     combined = prior + fresh
 
     # --- derived tabs: rebuilt from the whole log --------------------------
-    header, body = build_matrix(combined)
+    header, body = build_matrix(combined) if matrix_tab else ([], [])
     if body:
-        _write_tab(spreadsheet, matrix_worksheet, header, body)
+        _write_tab(spreadsheet, matrix_worksheet, header, body,
+                   banner="All funds - top 5 holdings as % of each fund's 13F "
+                          "portfolio, by quarter",
+                   footnote=FOOTNOTE)
         print(f"Rebuilt '{matrix_worksheet}' ({len(body)} holdings x "
               f"{len(header) - 3} quarters)")
 
@@ -526,8 +646,14 @@ def write_sheet(rows: list[list], sheet_name: str | None, worksheet: str,
         for fund in sorted({str(r[C_FUND]) for r in combined}):
             f_header, f_body = build_matrix(combined, fund_filter=fund)
             if f_body:
-                _write_tab(spreadsheet, _safe_tab_name(fund), f_header, f_body)
+                _write_tab(spreadsheet, _safe_tab_name(fund), f_header, f_body,
+                           banner=f"{fund} - top 5 holdings as % of 13F "
+                                  f"portfolio, by quarter",
+                           footnote=FOOTNOTE)
         print(f"Rebuilt {len({str(r[C_FUND]) for r in combined})} per-fund tab(s)")
+
+    write_about_tab(spreadsheet)
+    print("Rebuilt 'About'")
 
 
 def print_table(holdings: list[Holding]) -> None:
@@ -571,6 +697,8 @@ def main() -> int:
                    help="name of the all-funds matrix tab")
     p.add_argument("--no-fund-tabs", action="store_true",
                    help="skip the per-fund tabs")
+    p.add_argument("--no-matrix", action="store_true",
+                   help="skip the combined all-funds Matrix tab")
     p.add_argument("--creds", default=str(PROJECT_DIR / "service_account.json"))
     p.add_argument("--no-cache", action="store_true")
     args = p.parse_args()
@@ -652,7 +780,8 @@ def main() -> int:
         write_sheet(rows, args.sheet, args.worksheet, args.creds,
                     matrix_worksheet=args.matrix_worksheet,
                     per_fund_tabs=not args.no_fund_tabs,
-                    sheet_id=args.sheet_id)
+                    sheet_id=args.sheet_id,
+                    matrix_tab=not args.no_matrix)
     if not args.csv and not args.sheet and not args.sheet_id:
         print("\n(Nothing written — pass --csv and/or --sheet.)")
     return 0
