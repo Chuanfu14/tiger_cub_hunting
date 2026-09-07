@@ -1,24 +1,17 @@
 #!/usr/bin/env python3
-"""
-13F Top-Holdings Tracker
-========================
+"""13F top-holdings tracker.
 
-Reads a list of institutional managers from funds.json, pulls their last N
-quarters of SEC 13F-HR filings, computes each filing's top-K holdings by
-market value and their share of the reported portfolio, then writes a flat
-table to Google Sheets and/or CSV.
+Reads a list of institutional managers from funds.json, pulls their most
+recent SEC 13F-HR filings, computes each filing's largest holdings by market
+value and their share of the reported portfolio, and writes the result to
+Google Sheets and/or CSV.
 
-Quick start:
-    1. Set CONTACT_EMAIL below (or the SEC_CONTACT env var).
-    2. python fund_holdings.py --save-ciks --dry-run
-    3. python fund_holdings.py --sheet "13F Tracker"
+13F covers long US-listed equity positions only -- no shorts, bonds, cash,
+foreign listings, or most derivatives -- and is filed 45 days after quarter
+end. Percentages throughout are shares of the 13F-reported book, which is not
+the same as the fund's actual portfolio.
 
-What 13F data is and isn't:
-    - Long US-listed equity positions only. No shorts, bonds, cash,
-      foreign listings, or most derivatives.
-    - Filed 45 days after quarter end, so the newest quarter lags.
-    - "% of portfolio" throughout means "% of 13F-reported holdings",
-      which is not the same as % of the fund's actual book.
+Run with --help for options.
 """
 
 from __future__ import annotations
@@ -42,8 +35,8 @@ import requests
 # Settings
 # ---------------------------------------------------------------------------
 
-# SEC requires a descriptive User-Agent with a real contact address.
-# Requests without one get rate-limited or blocked outright.
+# SEC rate-limits or blocks requests without a descriptive User-Agent
+# carrying a real contact address.
 CONTACT_NAME = os.environ.get("SEC_CONTACT_NAME", "Stan Fu")
 CONTACT_EMAIL = os.environ.get("SEC_CONTACT_EMAIL", "your.email@example.com")
 USER_AGENT = f"{CONTACT_NAME} {CONTACT_EMAIL}"
@@ -132,7 +125,7 @@ def save_ciks(path: Path, raw: dict, resolved: dict[str, str]) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Step 1: fund name -> CIK
+# CIK resolution
 # ---------------------------------------------------------------------------
 
 def resolve_cik(company_name: str) -> list[tuple[str, str]]:
@@ -165,7 +158,7 @@ def resolve_cik(company_name: str) -> list[tuple[str, str]]:
 
 
 # ---------------------------------------------------------------------------
-# Step 2: list 13F-HR filings
+# Filing discovery
 # ---------------------------------------------------------------------------
 
 @dataclass
@@ -212,7 +205,7 @@ def list_13f_filings(cik: str, limit: int) -> list[Filing]:
 
 
 # ---------------------------------------------------------------------------
-# Step 3: parse the information table
+# Information table parsing
 # ---------------------------------------------------------------------------
 
 def _strip_ns(tag: str) -> str:
@@ -287,7 +280,7 @@ def _parse_info_table(raw: bytes) -> list[Position]:
 
 
 # ---------------------------------------------------------------------------
-# Step 4: aggregate to top-N
+# Aggregation
 # ---------------------------------------------------------------------------
 
 @dataclass
@@ -343,7 +336,7 @@ def top_holdings(fund: str, filing: Filing, positions: list[Position],
 
 
 # ---------------------------------------------------------------------------
-# Step 5: output
+# Output
 # ---------------------------------------------------------------------------
 
 LOG_BANNER = ("Holdings log - one row per fund, per quarter, per top-5 "
@@ -373,9 +366,31 @@ C_FUND, C_QUARTER, C_PERIOD = 0, 1, 2
 C_RANK, C_HOLDING, C_CUSIP6 = 5, 6, 7
 C_PCT = 9
 
+def _norm_period(value) -> str:
+    """Normalize a period-end date to YYYY-MM-DD.
+
+    Sheets may hand back a date it reformatted on write (3/31/2025), so keys
+    built from sheet reads must match keys built from fresh rows.
+    """
+    text = str(value).strip()
+    m = re.match(r"^(\d{1,2})/(\d{1,2})/(\d{4})$", text)
+    if m:
+        month, day, year = m.groups()
+        return f"{year}-{int(month):02d}-{int(day):02d}"
+    return text
+
+
+def _norm_cusip(value) -> str:
+    """CUSIPs are 6-char strings; Sheets may have eaten a leading zero."""
+    text = str(value).strip()
+    return text.zfill(6) if text.isdigit() and len(text) < 6 else text
+
+
 # A row's identity, for dedupe on append.
 def _row_key(row: list) -> tuple:
-    return (str(row[C_FUND]), str(row[C_PERIOD]), str(row[C_CUSIP6]))
+    return (str(row[C_FUND]).strip(),
+            _norm_period(row[C_PERIOD]),
+            _norm_cusip(row[C_CUSIP6]))
 
 
 def _safe_tab_name(name: str) -> str:
@@ -441,12 +456,49 @@ def build_matrix(all_rows: list[list], fund_filter: str | None = None
     return header, body
 
 
-FOOTNOTE = ("Cells are the stock's share of that fund's 13F-reported holdings "
-            "for the quarter. Blank = not in the fund's top 5 that quarter. "
-            "13F covers long US-listed equity only; it excludes shorts, bonds, "
-            "cash, and foreign listings, and is filed 45 days after quarter end. "
-            "A weight can move without any trading if the stock price moved. "
-            "See the About tab.")
+HOW_TO_READ = (
+    "Each number is that stock's percentage of the fund's reported portfolio "
+    "for that quarter. Read a row left to right to follow one position over "
+    "time. A blank cell means the stock was not among the fund's largest "
+    "holdings that quarter. Rows are sorted by the most recent quarter, "
+    "largest first. A percentage can rise or fall without the fund trading at "
+    "all, since it moves with the stock price. See the About tab for what "
+    "these filings do and don't cover."
+)
+
+
+def _reset_tab(spreadsheet, ws) -> None:
+    """Drop merges and cell formatting left over from a previous layout.
+
+    clear() only removes values. Stale merges swallow cells written beneath
+    them, and stale formatting bleeds into unrelated rows.
+    """
+    try:
+        spreadsheet.batch_update({"requests": [
+            {"unmergeCells": {"range": {"sheetId": ws.id}}},
+            {"repeatCell": {
+                "range": {"sheetId": ws.id},
+                "cell": {"userEnteredFormat": {}},
+                "fields": "userEnteredFormat",
+            }},
+        ]})
+    except Exception as exc:
+        print(f"   (reset skipped on '{ws.title}': {exc})", file=sys.stderr)
+
+
+def _set_row_height(spreadsheet, ws, row_index: int, pixels: int) -> None:
+    """Set one row's height. Purely cosmetic, so failures are non-fatal."""
+    try:
+        spreadsheet.batch_update({"requests": [{
+            "updateDimensionProperties": {
+                "range": {"sheetId": ws.id, "dimension": "ROWS",
+                          "startIndex": row_index, "endIndex": row_index + 1},
+                "properties": {"pixelSize": pixels},
+                "fields": "pixelSize",
+            }
+        }]})
+    except Exception as exc:
+        print(f"   (row height skipped on '{ws.title}': {exc})", file=sys.stderr)
 
 
 def _write_tab(spreadsheet, title: str, header: list, body: list[list],
@@ -455,36 +507,44 @@ def _write_tab(spreadsheet, title: str, header: list, body: list[list],
     height = len(body) + 30
     ws = _get_or_create(spreadsheet, title, height, len(header) + 2)
     ws.clear()
+    _reset_tab(spreadsheet, ws)
 
-    block: list[list] = [[banner] + [""] * (len(header) - 1)] if banner else []
+    width = len(header)
+    block: list[list] = []
+    if banner:
+        block.append([banner] + [""] * (width - 1))
+    if footnote:
+        block.append([footnote] + [""] * (width - 1))
+        block.append([""] * width)
+    header_row = len(block) + 1
     block.append(header)
     block.extend(body)
-    if footnote:
-        block.append([""] * len(header))
-        block.append([footnote] + [""] * (len(header) - 1))
 
     ws.update(values=block, range_name="A1", value_input_option="USER_ENTERED")
 
-    last_col = gspread_utils_col(len(header))
+    last_col = gspread_utils_col(width)
     if banner:
         ws.merge_cells(f"A1:{last_col}1")
         ws.format(f"A1:{last_col}1", {
-            "textFormat": {"bold": True, "fontSize": 12},
-            "backgroundColor": {"red": 0.92, "green": 0.94, "blue": 0.98},
+            "textFormat": {"bold": True, "fontSize": 16},
+            "backgroundColor": {"red": 0.90, "green": 0.93, "blue": 0.98},
+            "verticalAlignment": "MIDDLE",
         })
-        ws.format(f"A2:{last_col}2", {"textFormat": {"bold": True}})
-        ws.freeze(rows=2)
-    else:
-        ws.format(f"A1:{last_col}1", {"textFormat": {"bold": True}})
-        ws.freeze(rows=1)
+        _set_row_height(spreadsheet, ws, 0, 34)
 
     if footnote:
-        note_row = len(block)
-        ws.merge_cells(f"A{note_row}:{last_col}{note_row}")
-        ws.format(f"A{note_row}:{last_col}{note_row}", {
-            "textFormat": {"italic": True, "fontSize": 9},
+        row = 2 if banner else 1
+        ws.merge_cells(f"A{row}:{last_col}{row}")
+        ws.format(f"A{row}:{last_col}{row}", {
+            "textFormat": {"fontSize": 11},
             "wrapStrategy": "WRAP",
+            "verticalAlignment": "TOP",
         })
+        _set_row_height(spreadsheet, ws, row - 1, 76)
+
+    ws.format(f"A{header_row}:{last_col}{header_row}",
+              {"textFormat": {"bold": True, "fontSize": 11}})
+    ws.freeze(rows=header_row)
 
 
 ABOUT_ROWS = [
@@ -536,6 +596,7 @@ def write_about_tab(spreadsheet) -> None:
     try:
         ws = spreadsheet.worksheet("About")
         ws.clear()
+        _reset_tab(spreadsheet, ws)
     except gspread.WorksheetNotFound:
         ws = spreadsheet.add_worksheet(title="About", rows=60, cols=4, index=0)
 
@@ -588,7 +649,7 @@ def write_sheet(rows: list[list], sheet_name: str | None, worksheet: str,
                   file=sys.stderr)
             raise
 
-    # --- log tab: append only what's new -----------------------------------
+    # The log accumulates; only rows absent from it are sent.
     log = _get_or_create(spreadsheet, worksheet, len(rows) + 50, len(HEADER))
     existing = log.get_all_values()
     last_col = gspread_utils_col(len(HEADER))
@@ -600,13 +661,13 @@ def write_sheet(rows: list[list], sheet_name: str | None, worksheet: str,
 
     if header_idx is None:
         log.update(values=[[LOG_BANNER] + [""] * (len(HEADER) - 1), HEADER],
-                   range_name="A1", value_input_option="USER_ENTERED")
+                   range_name="A1", value_input_option="RAW")
         prior: list[list] = []
         header_idx = 1
     elif header_idx == 0:
         # older sheet: no banner yet, insert one above the header
         log.insert_row([LOG_BANNER] + [""] * (len(HEADER) - 1), index=1,
-                       value_input_option="USER_ENTERED")
+                       value_input_option="RAW")
         prior = existing[1:]
         header_idx = 1
     else:
@@ -624,7 +685,9 @@ def write_sheet(rows: list[list], sheet_name: str | None, worksheet: str,
     fresh = [r for r in rows if _row_key(r) not in seen]
 
     if fresh:
-        log.append_rows(fresh, value_input_option="USER_ENTERED")
+        # RAW keeps dates and leading-zero CUSIPs as text, so the dedupe key
+        # survives a round trip through the sheet.
+        log.append_rows(fresh, value_input_option="RAW")
         print(f"Appended {len(fresh)} new row(s) to '{worksheet}' "
               f"({len(rows) - len(fresh)} already present)")
     else:
@@ -632,13 +695,13 @@ def write_sheet(rows: list[list], sheet_name: str | None, worksheet: str,
 
     combined = prior + fresh
 
-    # --- derived tabs: rebuilt from the whole log --------------------------
+    # Views are regenerated from the full log, not just this run's rows.
     header, body = build_matrix(combined) if matrix_tab else ([], [])
     if body:
         _write_tab(spreadsheet, matrix_worksheet, header, body,
                    banner="All funds - top 5 holdings as % of each fund's 13F "
                           "portfolio, by quarter",
-                   footnote=FOOTNOTE)
+                   footnote=HOW_TO_READ)
         print(f"Rebuilt '{matrix_worksheet}' ({len(body)} holdings x "
               f"{len(header) - 3} quarters)")
 
@@ -649,7 +712,7 @@ def write_sheet(rows: list[list], sheet_name: str | None, worksheet: str,
                 _write_tab(spreadsheet, _safe_tab_name(fund), f_header, f_body,
                            banner=f"{fund} - top 5 holdings as % of 13F "
                                   f"portfolio, by quarter",
-                           footnote=FOOTNOTE)
+                           footnote=HOW_TO_READ)
         print(f"Rebuilt {len({str(r[C_FUND]) for r in combined})} per-fund tab(s)")
 
     write_about_tab(spreadsheet)

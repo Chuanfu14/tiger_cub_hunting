@@ -1,121 +1,107 @@
-# 13F Top-Holdings Tracker
+# 13F Holdings Tracker
 
-Pulls top-N holdings and portfolio weights for a list of hedge funds from SEC
-13F filings, across the last N quarters, and writes them to Google Sheets.
+A simple automation that gathers the top holdings of any hedge fund from their
+public SEC filings and drops them into a Google Sheet — one tab per fund,
+showing how each position's weight has moved quarter by quarter.
 
-## Setup
+## Why
+
+Hedge funds are required to disclose their US stock positions every quarter in
+a filing called a 13F. The data is public and free, but it arrives as raw XML
+buried in government archives — one file per fund, per quarter, with no
+percentages and no way to compare across time.
+
+Answering something simple like "what are Coatue's five biggest positions, and
+how have they changed over the last six quarters?" means opening a dozen
+filings and doing the math by hand.
+
+This does it for you.
+
+## What you get
+
+Each fund gets its own tab. Holdings run down the left, quarters across the top:
+
+| Holding | 2025Q1 | 2025Q2 | 2025Q3 | 2025Q4 | 2026Q1 | 2026Q2 |
+|---|---|---|---|---|---|---|
+| TAIWAN SEMICONDUCTOR | 5.83 | | 5.53 | 6.56 | 10.80 | 8.76 |
+| LAM RESEARCH CORP | | | | | 7.39 | 8.41 |
+| META PLATFORMS INC | 9.55 | 7.57 | 7.27 | 6.25 | | |
+
+Each number is that stock's percentage of the fund's reported portfolio. A
+blank means it wasn't in the fund's top five that quarter — so you can see
+positions entering and exiting at a glance.
+
+There's also an `About` tab explaining the data, and a `Holdings` tab with the
+full underlying records.
+
+## Choosing which funds to track
+
+Everything lives in one file, `funds.json`. To add a fund, copy an entry and
+change the name:
+
+```json
+{
+  "label": "Coatue",
+  "search": "Coatue Management",
+  "cik": null,
+  "enabled": true
+}
+```
+
+`label` is what appears on the tab. `search` is the fund's registered name,
+used to find them in the SEC database. Leave `cik` as `null` — the tool looks
+it up and fills it in for you.
+
+## Getting started
 
 ```bash
-# in VS Code: File > Open Folder > this directory, then open a terminal
-python -m venv .venv
-source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-```
-
-In VS Code, hit `Cmd/Ctrl+Shift+P` → **Python: Select Interpreter** → pick the
-`.venv` one. The three launch configs in `.vscode/launch.json` then work off
-the Run and Debug panel (F5).
-
-## First run
-
-Set your contact info first — SEC blocks generic user agents:
-
-```bash
-export SEC_CONTACT_NAME="Your Name"
 export SEC_CONTACT_EMAIL="you@example.com"
+
+python fund_holdings.py --save-ciks --dry-run    # preview in the terminal
+python fund_holdings.py --csv holdings.csv       # save to a spreadsheet file
+python fund_holdings.py --sheet-id "<id>"        # push to Google Sheets
 ```
 
-Or edit the `env` block in `.vscode/launch.json`.
+The SEC asks automated tools to identify themselves with a contact email. It's
+not an account or a signup — nothing is registered, and the data is free.
 
-Then resolve CIKs and preview without writing anywhere:
+Writing to Google Sheets needs a one-time credentials setup. See
+[SETUP.md](SETUP.md).
 
-```bash
-python fund_holdings.py --save-ciks --dry-run
-```
+## Options
 
-This prints what each fund name matched on EDGAR. **Check these.** Manager
-names are messy — "Tiger Global Management" may match several registered
-entities, and the wrong pick gives you a wrong portfolio. Once you've
-confirmed, the CIKs are written into `funds.json` and future runs skip the
-lookup entirely.
-
-## Google Sheets auth
-
-1. Google Cloud Console → new project → enable the **Google Sheets API**.
-2. Credentials → Create Credentials → **Service Account**.
-3. On the service account, Keys → Add Key → JSON. Save it as
-   `service_account.json` in this folder. (It's gitignored.)
-4. Open that JSON, copy the `client_email` value.
-5. Create your spreadsheet in Google Sheets, hit Share, and share it with
-   that email as **Editor**.
-
-Then:
-
-```bash
-python fund_holdings.py --sheet "13F Tracker"
-```
-
-## Adding a fund
-
-Open `funds.json`, copy any block, change `label` and `search`, set
-`"cik": null`, and run with `--save-ciks`. Nothing else to touch.
-
-## Useful flags
-
-| Flag | Effect |
+| Flag | What it does |
 |---|---|
-| `--quarters 8` | more history (default 6) |
-| `--top 10` | top 10 instead of top 5 |
-| `--only "Tiger Global" "Coatue"` | run a subset |
-| `--csv out.csv` | also write CSV |
-| `--dry-run` | console only |
-| `--no-cache` | clear cached EDGAR responses and refetch |
+| `--quarters N` | How many quarters back to pull (default 6) |
+| `--top N` | How many holdings per fund (default 5) |
+| `--only "Coatue"` | Just one fund, or a few |
+| `--save-ciks` | Look up and save fund IDs |
+| `--dry-run` | Preview only, saves nothing |
+| `--csv holdings.csv` | Save to a spreadsheet file |
+| `--sheet-id "<id>"` | Send to a Google Sheet |
+| `--no-matrix` | Skip the combined all-funds tab |
+| `--no-fund-tabs` | Skip the individual fund tabs |
+| `--no-cache` | Fetch fresh data instead of reusing saved copies |
 
-Responses are cached in `.edgar_cache/` so re-runs are fast and you aren't
-hammering EDGAR while iterating. Filings never change once posted, so caching
-is safe — except at the start of a filing window, when `--no-cache` picks up
-newly posted filings.
+Re-running is safe — it adds new quarters without duplicating or overwriting
+what's already there.
 
-## Sheet layout
+## Reading the results carefully
 
-Three kinds of tab:
+13F filings show less than people assume. Four things to keep in mind:
 
-**`Holdings`** — the append-only log. One row per holding per fund per
-quarter:
+**They're incomplete.** Only US-listed stocks the fund owns. No bets against
+companies, no bonds, no cash, no foreign listings. "Percent of portfolio"
+means percent of what gets reported, not percent of the whole fund.
 
-`Fund | Quarter | Period End | Filed | Form | Rank | Holding | CUSIP6 | Value | % of 13F Portfolio | Total Issuers in Filing`
+**They're late.** Funds have 45 days after each quarter ends to file, so the
+newest data is at least six weeks old when it appears.
 
-Re-running never duplicates a row — dedupe is on Fund + Period End + CUSIP6.
-Quarters collected in earlier runs stay put. This is the source of truth.
+**Rising doesn't mean buying.** If a stock gains 30% and the fund does nothing
+at all, its weight still goes up. These numbers show position sizes, not
+trading activity.
 
-**`Matrix`** — all funds, holdings down the left, quarters across the top,
-weights in the cells. Blank means the name wasn't in the top N that quarter.
-
-**One tab per fund** — the same matrix, filtered. Tab name matches the
-`label` in `funds.json`. Disable with `--no-fund-tabs`.
-
-The Matrix and per-fund tabs are *views*: they get cleared and rebuilt from
-the whole `Holdings` log on every run. So don't edit them by hand — your
-edits get wiped next run. If you want to annotate, do it on a new tab that
-references them, or add columns to the right of `Holdings`.
-
-Because the views read from the accumulated log rather than the current run,
-you can pull six quarters today and one quarter next February, and the matrix
-will show all seven.
-
-`CUSIP6` is the issuer-level CUSIP, so multiple share classes of the same
-company roll into one line. It's a stable join key — better than the issuer
-name, which funds spell inconsistently.
-
-## What this data is not
-
-13F covers **long US-listed equity positions only**. It excludes short
-positions, bonds, cash, foreign listings, and most derivatives. Filings are
-due 45 days after quarter end, so the newest quarter lags and the positions
-you see are already stale by at least six weeks.
-
-This matters most for the long/short funds here. A fund could be net short a
-name that shows up as a top-five long in this table. And for D1 in
-particular, a large private book means the 13F is a small slice of the actual
-portfolio. "% of 13F portfolio" is a real number; "% of the fund" is not
-something 13F can tell you.
+**Big jumps can be illusions.** When a private company goes public, a fund's
+long-held stake suddenly becomes reportable and can appear to take over the
+portfolio overnight. Nothing was bought — it just became visible.
